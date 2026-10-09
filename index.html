@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rover Steering and Traversal PID Demonstrator</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">ED5080 · MECHATRONICS SYSTEM DESIGN</p>
+        <h1>Rover Steering & Traversal Control</h1>
+      </div>
+      <p class="system-status"><span id="run-dot"></span><span id="run-state">Ready</span></p>
+    </header>
+
+    <main class="app-shell">
+      <section class="workspace" aria-label="Simulation workspace">
+        <div class="mode-row" role="tablist" aria-label="Simulation mode">
+          <button class="mode-button active" id="traversal-mode" role="tab" aria-selected="true">Traversal</button>
+          <button class="mode-button" id="steering-mode" role="tab" aria-selected="false">Steering configurations</button>
+          <p id="mode-hint">Click on the map to add waypoints. The rover follows them using four-wheel Ackermann steering.</p>
+        </div>
+
+        <div class="map-frame">
+          <canvas id="map-canvas" width="1050" height="660" aria-label="Top-view rover map"></canvas>
+
+          <div class="map-key" aria-label="Map legend">
+            <span><i class="key-rover"></i>Rover heading</span>
+            <span><i class="key-path"></i>Reference path</span>
+            <span><i class="key-point"></i>Waypoint</span>
+          </div>
+
+          <p class="map-message" id="map-message">Add at least one waypoint, then press Start.</p>
+        </div>
+
+        <div class="action-bar" id="traversal-actions">
+          <button class="primary" id="start-button">Start traversal</button>
+          <button id="pause-button">Pause</button>
+          <button class="danger-outline" id="reset-button">Reset map</button>
+          <span id="waypoint-readout">0 waypoints</span>
+        </div>
+
+        <div class="steering-actions is-hidden" id="steering-actions">
+          <p>Choose a configuration. The wheels move immediately from their current angles.</p>
+
+          <div class="configuration-grid">
+            <button class="configuration-button selected" data-config="home">
+              <strong>Home</strong>
+              <small>All wheels at 0°</small>
+            </button>
+
+            <button class="configuration-button" data-config="crab">
+              <strong>Crab</strong>
+              <small>All wheels at +90°</small>
+            </button>
+
+            <button class="configuration-button" data-config="bishop">
+              <strong>Bishop</strong>
+              <small>All wheels at +45°</small>
+            </button>
+
+            <button class="configuration-button" data-config="rotate">
+              <strong>Rotate in place</strong>
+              <small>Tangential wheel axes</small>
+            </button>
+          </div>
+
+          <div class="steering-bottom-actions">
+            <button id="steering-pause">Pause wheel motion</button>
+            <button class="danger-outline" id="steering-home">Return to home</button>
+            <span id="configuration-readout">Home configuration</span>
+          </div>
+        </div>
+      </section>
+
+      <aside class="control-column" aria-label="PID controls and response graph">
+        <section class="panel graph-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">LIVE RESPONSE</p>
+              <h2 id="graph-title">Speed response</h2>
+            </div>
+
+            <label class="wheel-select" id="wheel-select-label">
+              Wheel
+              <select id="wheel-select">
+                <option value="0">Front left</option>
+                <option value="1">Front right</option>
+                <option value="2">Rear left</option>
+                <option value="3">Rear right</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="graph-tabs" id="graph-tabs">
+            <button class="graph-tab active" data-plot="speed">Drive speed</button>
+            <button class="graph-tab" data-plot="steer">Steering angle</button>
+          </div>
+
+          <canvas id="plot-canvas" width="540" height="260" aria-label="PID response plot"></canvas>
+
+          <div class="plot-key">
+            <span class="reference-line">Reference</span>
+            <span class="actual-line">Actual</span>
+          </div>
+        </section>
+
+        <section class="panel controller-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">STEERING CONTROLLER</p>
+              <h2>Wheel-angle PID</h2>
+            </div>
+            <output id="steer-summary">P only</output>
+          </div>
+
+          <div class="gain-list">
+            <label>
+              K<sub>p</sub>
+              <input id="steer-kp" type="range" min="0" max="20" step="0.1" value="7.0" />
+              <output id="steer-kp-value">7.0</output>
+            </label>
+
+            <label>
+              K<sub>i</sub>
+              <input id="steer-ki" type="range" min="0" max="12" step="0.05" value="0" />
+              <output id="steer-ki-value">0.00</output>
+            </label>
+
+            <label>
+              K<sub>d</sub>
+              <input id="steer-kd" type="range" min="0" max="5" step="0.05" value="0" />
+              <output id="steer-kd-value">0.00</output>
+            </label>
+          </div>
+
+          <p class="controller-note">
+            For the nominal steering model, P-only control is stable. Add I only to remove a persistent load-induced angle error; use D to damp a fast response.
+          </p>
+        </section>
+
+        <section class="panel controller-panel" id="drive-controller">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">TRAVERSAL CONTROLLER</p>
+              <h2>Forward-speed PID</h2>
+            </div>
+            <output id="drive-summary">P only</output>
+          </div>
+
+          <div class="gain-list">
+            <label>
+              K<sub>p</sub>
+              <input id="drive-kp" type="range" min="0" max="8" step="0.05" value="2.40" />
+              <output id="drive-kp-value">2.40</output>
+            </label>
+
+            <label>
+              K<sub>i</sub>
+              <input id="drive-ki" type="range" min="0" max="6" step="0.05" value="0" />
+              <output id="drive-ki-value">0.00</output>
+            </label>
+
+            <label>
+              K<sub>d</sub>
+              <input id="drive-kd" type="range" min="0" max="3" step="0.05" value="0" />
+              <output id="drive-kd-value">0.00</output>
+            </label>
+          </div>
+
+          <p class="controller-note">
+            The drive loop converts the path follower’s requested speed into the simulated rover’s actual speed.
+          </p>
+        </section>
+
+        <section class="panel telemetry-panel">
+          <p class="eyebrow">TELEMETRY</p>
+          <dl>
+            <div><dt>Speed</dt><dd id="speed-telemetry">0.00 m/s</dd></div>
+            <div><dt>Heading</dt><dd id="heading-telemetry">0.0°</dd></div>
+            <div><dt>Target</dt><dd id="target-telemetry">—</dd></div>
+            <div><dt>Selected wheel</dt><dd id="angle-telemetry">0.0°</dd></div>
+          </dl>
+        </section>
+      </aside>
+    </main>
+
+    <footer>
+      Simplified control demonstrator: first-order motor-speed dynamics plus integrated wheel angle. It visualizes controller behaviour and kinematics; it is not a terrain or structural simulation.
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>
