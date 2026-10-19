@@ -35,6 +35,13 @@
           <p class="map-message" id="map-message">Add at least one waypoint, then press Start.</p>
         </div>
 
+        <div class="steering-frame is-hidden" id="steering-frame">
+          <canvas id="steering-canvas" width="1050" height="660" aria-label="Zoomed steering-only rover view"></canvas>
+          <p class="steering-message">
+            Actual wheel angles are shown on the rover. Select a configuration to move each steering module.
+          </p>
+        </div>
+
         <div class="action-bar" id="traversal-actions">
           <button class="primary" id="start-button">Start traversal</button>
           <button id="pause-button">Pause</button>
@@ -107,7 +114,7 @@
           </div>
         </section>
 
-        <section class="panel controller-panel">
+        <section class="panel controller-panel" id="steer-controller">
           <div class="panel-heading">
             <div>
               <p class="eyebrow">STEERING CONTROLLER</p>
@@ -116,26 +123,12 @@
             <output id="steer-summary">P only</output>
           </div>
 
+         <!-- Steering PID -->
           <div class="gain-list">
-            <label>
-              K<sub>p</sub>
-              <input id="steer-kp" type="range" min="0" max="20" step="0.1" value="7.0" />
-              <output id="steer-kp-value">7.0</output>
-            </label>
-
-            <label>
-              K<sub>i</sub>
-              <input id="steer-ki" type="range" min="0" max="12" step="0.05" value="0" />
-              <output id="steer-ki-value">0.00</output>
-            </label>
-
-            <label>
-              K<sub>d</sub>
-              <input id="steer-kd" type="range" min="0" max="5" step="0.05" value="0" />
-              <output id="steer-kd-value">0.00</output>
-            </label>
+            <label><span>K<sub>p</sub></span><input id="steer-kp" type="number" min="0" max="50" step="0.01" value="7.00" /></label>
+            <label><span>K<sub>i</sub></span><input id="steer-ki" type="number" min="0" max="50" step="0.01" value="0.00" /></label>
+            <label><span>K<sub>d</sub></span><input id="steer-kd" type="number" min="0" max="20" step="0.01" value="0.00" /></label>
           </div>
-
           <p class="controller-note">
             For the nominal steering model, P-only control is stable. Add I only to remove a persistent load-induced angle error; use D to damp a fast response.
           </p>
@@ -145,33 +138,20 @@
           <div class="panel-heading">
             <div>
               <p class="eyebrow">TRAVERSAL CONTROLLER</p>
-              <h2>Forward-speed PID</h2>
+              <h2>Position-to-speed PID</h2>
             </div>
             <output id="drive-summary">P only</output>
           </div>
 
+          <!-- Drive PID -->
           <div class="gain-list">
-            <label>
-              K<sub>p</sub>
-              <input id="drive-kp" type="range" min="0" max="8" step="0.05" value="2.40" />
-              <output id="drive-kp-value">2.40</output>
-            </label>
-
-            <label>
-              K<sub>i</sub>
-              <input id="drive-ki" type="range" min="0" max="6" step="0.05" value="0" />
-              <output id="drive-ki-value">0.00</output>
-            </label>
-
-            <label>
-              K<sub>d</sub>
-              <input id="drive-kd" type="range" min="0" max="3" step="0.05" value="0" />
-              <output id="drive-kd-value">0.00</output>
-            </label>
+            <label><span>K<sub>p</sub></span><input id="drive-kp" type="number" min="0" max="20" step="0.01" value="0.65" /></label>
+            <label><span>K<sub>i</sub></span><input id="drive-ki" type="number" min="0" max="20" step="0.01" value="0.00" /></label>
+            <label><span>K<sub>d</sub></span><input id="drive-kd" type="number" min="0" max="20" step="0.01" value="0.00" /></label>
           </div>
 
           <p class="controller-note">
-            The drive loop converts the path follower’s requested speed into the simulated rover’s actual speed.
+            The drive PID uses current rover position and goal position to generate the requested speed.
           </p>
         </section>
 
@@ -183,6 +163,23 @@
             <div><dt>Target</dt><dd id="target-telemetry">—</dd></div>
             <div><dt>Selected wheel</dt><dd id="angle-telemetry">0.0°</dd></div>
           </dl>
+        </section>
+
+        <section class="panel model-panel">
+          <p class="eyebrow">MODEL USED</p>
+          <h2>Control equations</h2>
+
+          <p><b>Drive position error:</b> e<sub>p</sub> = ‖p<sub>goal</sub> − p<sub>rover</sub>‖</p>
+          <p>v<sub>ref</sub> = sat(K<sub>p</sub>e<sub>p</sub> + K<sub>i</sub>∫e<sub>p</sub>dt + K<sub>d</sub>de<sub>p</sub>/dt)</p>
+          <p>dv/dt = (v<sub>ref</sub> − v)/τ<sub>v</sub>, dx/dt = v cos ψ, dy/dt = v sin ψ</p>
+
+          <p><b>Steering:</b> e<sub>θ</sub> = θ<sub>ref</sub> − θ</p>
+          <p>u<sub>θ</sub> = sat(K<sub>p</sub>e<sub>θ</sub> + K<sub>i</sub>∫e<sub>θ</sub>dt + K<sub>d</sub>de<sub>θ</sub>/dt)</p>
+          <p>dω/dt = (1.65u<sub>θ</sub> − ω)/0.115, dθ/dt = ω</p>
+
+          <p class="controller-note">
+            Wheel angle is physically constrained to ±90°. Crab is exactly +90°, so it cannot overshoot without violating the mechanical stop. Use Bishop (45°) to observe an interior-step response.
+          </p>
         </section>
       </aside>
     </main>

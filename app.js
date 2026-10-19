@@ -1,23 +1,10 @@
 "use strict";
 
-/*
-  Rover PID demonstrator
-
-  Coordinates:
-  - x: forward/right on the map
-  - y: upward on the map
-  - heading: measured from +x
-  - steering angle: 0° is along the rover forward axis
-  - positive steering angle: left
-
-  Plant model:
-  - steering motor speed has first-order dynamics
-  - wheel angle is the integral of motor speed
-  - drive speed has first-order dynamics
-*/
-
 const mapCanvas = document.querySelector("#map-canvas");
 const mapCtx = mapCanvas.getContext("2d");
+
+const steeringCanvas = document.querySelector("#steering-canvas");
+const steeringCtx = steeringCanvas.getContext("2d");
 
 const plotCanvas = document.querySelector("#plot-canvas");
 const plotCtx = plotCanvas.getContext("2d");
@@ -27,8 +14,11 @@ const UI = {
   steeringMode: document.querySelector("#steering-mode"),
   hint: document.querySelector("#mode-hint"),
   message: document.querySelector("#map-message"),
+
   traversalActions: document.querySelector("#traversal-actions"),
   steeringActions: document.querySelector("#steering-actions"),
+  mapFrame: document.querySelector(".map-frame"),
+  steeringFrame: document.querySelector("#steering-frame"),
 
   start: document.querySelector("#start-button"),
   pause: document.querySelector("#pause-button"),
@@ -76,7 +66,6 @@ const MAP = { width: 10.5, height: 6.6, pixelsPerMetre: 100 };
 const MAX_STEER = degToRad(90);
 const MAX_SPEED = 1.0;
 const MAX_STEER_COMMAND = degToRad(220);
-const MAX_DRIVE_COMMAND = 1.35;
 
 const SAMPLE_PERIOD = 0.035;
 const HISTORY_SECONDS = 10;
@@ -102,8 +91,9 @@ const model = {
 
     speed: 0,
     yawRate: 0,
-    speedIntegral: 0,
-    speedPrevError: 0,
+
+    positionIntegral: 0,
+    positionPrevError: 0,
     speedReference: 0,
 
     wheel: WHEEL_POSITIONS.map(() => ({
@@ -132,30 +122,14 @@ const gains = {
 };
 
 function bindGains(prefix) {
-  const fields = ["kp", "ki", "kd"].map((key) => {
-    const input = document.querySelector(`#${prefix}-${key}`);
-    const output = document.querySelector(`#${prefix}-${key}-value`);
-
-    const update = () => {
-      output.value = Number(input.value).toFixed(key === "kp" ? 1 : 2);
-    };
-
-    input.addEventListener("input", update);
-    update();
-
-    return input;
-  });
+  const fields = ["kp", "ki", "kd"].map(
+    (key) => document.querySelector(`#${prefix}-${key}`)
+  );
 
   return {
-    get kp() {
-      return Number(fields[0].value);
-    },
-    get ki() {
-      return Number(fields[1].value);
-    },
-    get kd() {
-      return Number(fields[2].value);
-    },
+    get kp() { return Number(fields[0].value) || 0; },
+    get ki() { return Number(fields[1].value) || 0; },
+    get kd() { return Number(fields[2].value) || 0; },
   };
 }
 
@@ -238,6 +212,9 @@ function switchMode(mode) {
   UI.traversalActions.classList.toggle("is-hidden", mode !== "traversal");
   UI.steeringActions.classList.toggle("is-hidden", mode !== "steering");
 
+  UI.mapFrame.classList.toggle("is-hidden", mode !== "traversal");
+  UI.steeringFrame.classList.toggle("is-hidden", mode !== "steering");
+
   UI.driveController.classList.toggle("is-hidden", mode !== "traversal");
   UI.graphTabs.classList.toggle("is-hidden", mode !== "traversal");
   UI.wheelSelectLabel.classList.toggle("is-hidden", mode === "steering");
@@ -252,7 +229,9 @@ function switchMode(mode) {
       ? "Add at least one waypoint, then press Start."
       : "Steering-only view: the chassis stays fixed while the four steering modules move.";
 
-  if (mode === "steering") changePlot("steer");
+  if (mode === "steering") {
+    changePlot("steer");
+  }
 
   clearHistory();
   refreshStatus();
@@ -295,8 +274,8 @@ function resetTraversal() {
 
   model.rover.speed = 0;
   model.rover.yawRate = 0;
-  model.rover.speedIntegral = 0;
-  model.rover.speedPrevError = 0;
+  model.rover.positionIntegral = 0;
+  model.rover.positionPrevError = 0;
   model.rover.speedReference = 0;
 
   resetWheelStates();
@@ -330,6 +309,7 @@ function chooseConfiguration(name) {
   });
 
   UI.configReadout.textContent = `${labelForConfig(name)} selected`;
+
   UI.message.textContent =
     `${labelForConfig(name)} target applied. Each wheel is moving from its present angle.`;
 
@@ -361,10 +341,6 @@ function setConfiguration(name, immediate) {
 }
 
 function configurations() {
-  /*
-    Tangential wheel directions about rover centre.
-    Equivalent directions are folded into physical ±90° steering range.
-  */
   const rotate = WHEEL_POSITIONS.map((position) => {
     return toSteeringRange(Math.atan2(position.x, -position.y));
   });
@@ -405,13 +381,14 @@ function addWaypoint(event) {
     y: MAP.height - yPixels / MAP.pixelsPerMetre,
   };
 
-  const insideMap =
-    point.x >= 0.15 &&
-    point.x <= MAP.width - 0.15 &&
-    point.y >= 0.15 &&
-    point.y <= MAP.height - 0.15;
-
-  if (!insideMap) return;
+  if (
+    point.x < 0.15 ||
+    point.x > MAP.width - 0.15 ||
+    point.y < 0.15 ||
+    point.y > MAP.height - 0.15
+  ) {
+    return;
+  }
 
   model.waypoints.push(point);
 
@@ -439,18 +416,15 @@ function changePlot(plot) {
 function updateTraversal(dt) {
   const rover = model.rover;
 
-  /* Pause freezes every simulated state. */
   if (model.paused) return;
 
-  /* When stopped, settle steering and speed back to zero. */
   if (!model.running || model.waypoints.length === 0) {
-    rover.speedReference = 0;
+    updateDrive(dt, 0, 0);
 
     rover.wheel.forEach((wheel) => {
       wheel.reference = 0;
     });
 
-    updateDrive(dt, 0);
     updateAllSteering(dt);
     return;
   }
@@ -466,9 +440,11 @@ function updateTraversal(dt) {
 
   const dx = target.x - rover.x;
   const dy = target.y - rover.y;
-  const distance = Math.hypot(dx, dy);
 
-  if (distance < 0.22) {
+  /* e_p = ||p_goal - p_rover|| */
+  const distanceError = Math.hypot(dx, dy);
+
+  if (distanceError < 0.22) {
     model.waypointIndex += 1;
 
     if (model.waypointIndex >= model.waypoints.length) {
@@ -485,7 +461,7 @@ function updateTraversal(dt) {
   const headingError = normalizeAngle(desiredHeading - rover.heading);
 
   const lookahead = clamp(
-    Math.max(distance, model.lookahead),
+    Math.max(distanceError, model.lookahead),
     model.lookahead,
     1.5,
   );
@@ -496,14 +472,9 @@ function updateTraversal(dt) {
     1.8,
   );
 
-  const requestedSpeed =
-    Math.min(MAX_SPEED, 0.42 + 0.33 * distance) *
-    (1 - 0.36 * Math.min(1, Math.abs(curvature) / 1.8));
-
-  rover.speedReference = Math.max(0.18, requestedSpeed);
-
+  updateDrive(dt, distanceError, curvature);
   setAckermannReferences(curvature, rover.speedReference);
-  updateDrive(dt, rover.speedReference);
+
   updateAllSteering(dt);
   updateRoverPose(dt);
 }
@@ -522,12 +493,12 @@ function updateSteeringMode(dt) {
 
 function setAckermannReferences(curvature, forwardSpeed) {
   /*
-    Rigid body wheel velocity:
+    For each wheel:
 
-    v_wheel = [v - ωy_i, ωx_i]
-    where ω = vκ
+    v_wheel = [v - omega*y_i, omega*x_i]
+    omega = v*curvature
 
-    Every wheel gets its own actual angle reference.
+    Wheel reference = atan2(lateral component, longitudinal component)
   */
   const yawReference = forwardSpeed * curvature;
 
@@ -574,18 +545,15 @@ function updateSteeringWheel(wheel, dt) {
 
   const saturated = Math.abs(rawCommand - command) > 1e-8;
 
-  /*
-    Conditional integration anti-windup:
-    integral does not keep building while actuator is saturated.
-  */
   if (!saturated || Math.sign(rawCommand) !== Math.sign(error)) {
     wheel.integral = candidateIntegral;
   }
 
-  /* First-order steering motor-speed response. */
+  /*
+    d(omega)/dt = (1.65*u - omega)/0.115
+    d(theta)/dt = omega
+  */
   wheel.rate += ((1.65 * command) - wheel.rate) * dt / 0.115;
-
-  /* Wheel angle is integral of actuator angular speed. */
   wheel.angle += wheel.rate * dt;
 
   if (wheel.angle > MAX_STEER || wheel.angle < -MAX_STEER) {
@@ -596,44 +564,58 @@ function updateSteeringWheel(wheel, dt) {
   wheel.prevError = error;
 }
 
-function updateDrive(dt, reference) {
+function updateDrive(dt, positionError, curvature) {
   const rover = model.rover;
 
-  const error = reference - rover.speed;
-  const derivative = (error - rover.speedPrevError) / dt;
+  const derivative =
+    (positionError - rover.positionPrevError) / dt;
 
   const candidateIntegral = clamp(
-    rover.speedIntegral + error * dt,
+    rover.positionIntegral + positionError * dt,
     -1.2,
     1.2,
   );
 
-  const rawCommand =
-    gains.drive.kp * error +
+  /*
+    PID output is the velocity reference:
+
+    v_ref = Kp*e_p + Ki*integral(e_p) + Kd*de_p/dt
+  */
+  const rawSpeedReference =
+    gains.drive.kp * positionError +
     gains.drive.ki * candidateIntegral +
     gains.drive.kd * derivative;
 
-  const command = clamp(
-    rawCommand,
-    -MAX_DRIVE_COMMAND,
-    MAX_DRIVE_COMMAND,
+  /*
+    Slow down while making a sharper turn.
+    This does not replace the PID; it is a trajectory-safety scale.
+  */
+  const cornerScale =
+    1 - 0.36 * Math.min(1, Math.abs(curvature) / 1.8);
+
+  const speedReference = clamp(
+    rawSpeedReference * cornerScale,
+    0,
+    MAX_SPEED,
   );
 
-  const saturated = Math.abs(rawCommand - command) > 1e-8;
+  const saturated =
+    Math.abs(rawSpeedReference * cornerScale - speedReference) > 1e-8;
 
-  if (!saturated || Math.sign(rawCommand) !== Math.sign(error)) {
-    rover.speedIntegral = candidateIntegral;
+  if (!saturated || Math.sign(rawSpeedReference) !== Math.sign(positionError)) {
+    rover.positionIntegral = candidateIntegral;
   }
 
-  /*
-    First-order longitudinal response with a small
-    rolling-resistance-like damping term.
-  */
-  rover.speed +=
-    ((command - 0.10 * rover.speed) - rover.speed) * dt / 0.24;
+  rover.speedReference = speedReference;
 
+  /*
+    First-order drive plant:
+    dv/dt = (v_ref - v)/0.24
+  */
+  rover.speed += (rover.speedReference - rover.speed) * dt / 0.24;
   rover.speed = clamp(rover.speed, 0, 1.22);
-  rover.speedPrevError = error;
+
+  rover.positionPrevError = positionError;
 }
 
 function updateRoverPose(dt) {
@@ -652,7 +634,10 @@ function updateRoverPose(dt) {
   );
 
   rover.yawRate = rover.speed * curvatureActual;
-  rover.heading = normalizeAngle(rover.heading + rover.yawRate * dt);
+
+  rover.heading = normalizeAngle(
+    rover.heading + rover.yawRate * dt,
+  );
 
   rover.x += rover.speed * Math.cos(rover.heading) * dt;
   rover.y += rover.speed * Math.sin(rover.heading) * dt;
@@ -720,23 +705,121 @@ function frame(now) {
     model.plotAccumulator = 0;
   }
 
-  renderMap();
+  renderScene();
   renderPlot();
   refreshTelemetry();
 
   requestAnimationFrame(frame);
 }
 
-function renderMap() {
+function renderScene() {
+  if (model.mode === "steering") {
+    renderSteeringView();
+    return;
+  }
+
   mapCtx.clearRect(0, 0, mapCanvas.width, mapCanvas.height);
 
   drawMapGrid(mapCtx);
+  drawPath(mapCtx);
+  drawMapRover(mapCtx);
+}
 
-  if (model.mode === "traversal") {
-    drawPath(mapCtx);
-  }
+function renderSteeringView() {
+  const rover = model.rover;
+  const scale = 255;
 
-  drawRover(mapCtx);
+  const length = WHEEL_BASE * scale;
+  const width = 0.95 * scale;
+
+  steeringCtx.clearRect(0, 0, steeringCanvas.width, steeringCanvas.height);
+
+  steeringCtx.fillStyle = "#e8e6df";
+  steeringCtx.fillRect(0, 0, steeringCanvas.width, steeringCanvas.height);
+
+  steeringCtx.strokeStyle = "#c9cfcd";
+  steeringCtx.setLineDash([7, 7]);
+  steeringCtx.beginPath();
+  steeringCtx.moveTo(0, steeringCanvas.height / 2);
+  steeringCtx.lineTo(steeringCanvas.width, steeringCanvas.height / 2);
+  steeringCtx.stroke();
+  steeringCtx.setLineDash([]);
+
+  steeringCtx.save();
+  steeringCtx.translate(
+    steeringCanvas.width / 2,
+    steeringCanvas.height / 2,
+  );
+
+  steeringCtx.fillStyle = "#f7f8f6";
+  steeringCtx.strokeStyle = "#1f2d33";
+  steeringCtx.lineWidth = 3;
+
+  steeringCtx.fillRect(-length / 2, -width / 2, length, width);
+  steeringCtx.strokeRect(-length / 2, -width / 2, length, width);
+
+  steeringCtx.fillStyle = "#075966";
+  steeringCtx.fillRect(length / 2 - 16, -width / 2 + 12, 16, width - 24);
+
+  steeringCtx.fillStyle = "#1f2d33";
+  steeringCtx.font = "700 16px system-ui";
+  steeringCtx.fillText("FRONT", length / 2 - 73, 6);
+
+  WHEEL_POSITIONS.forEach((position, index) => {
+    drawZoomedWheel(
+      steeringCtx,
+      position,
+      rover.wheel[index].angle,
+      index,
+      scale,
+    );
+  });
+
+  steeringCtx.restore();
+}
+
+function drawZoomedWheel(ctx, position, steeringAngle, index, scale) {
+  const x = position.x * scale;
+  const y = -position.y * scale;
+
+  const wheelLength = 0.36 * scale;
+  const wheelWidth = 0.18 * scale;
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(-steeringAngle);
+
+  ctx.fillStyle = "#263c43";
+  roundedRect(
+    ctx,
+    -wheelLength / 2,
+    -wheelWidth / 2,
+    wheelLength,
+    wheelWidth,
+    8,
+  );
+  ctx.fill();
+
+  ctx.strokeStyle = "#f4f2ed";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+
+  [-0.25, 0, 0.25].forEach((fraction) => {
+    const tread = fraction * wheelLength;
+    ctx.moveTo(tread, -wheelWidth * 0.28);
+    ctx.lineTo(tread, wheelWidth * 0.28);
+  });
+
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.fillStyle = "#1f2d33";
+  ctx.font = "700 14px system-ui";
+  ctx.fillText(
+    `${WHEEL_TAGS[index]}  ${formatAngle(steeringAngle)}`,
+    x - 38,
+    y - wheelWidth / 2 - 16,
+  );
 }
 
 function drawMapGrid(ctx) {
@@ -812,7 +895,7 @@ function drawPath(ctx) {
   });
 }
 
-function drawRover(ctx) {
+function drawMapRover(ctx) {
   const rover = model.rover;
   const centre = worldToCanvas(rover);
 
@@ -824,7 +907,6 @@ function drawRover(ctx) {
   ctx.translate(centre.x, centre.y);
   ctx.rotate(-rover.heading);
 
-  /* Chassis. */
   ctx.fillStyle = "#f7f8f6";
   ctx.strokeStyle = "#1f2d33";
   ctx.lineWidth = 2.2;
@@ -832,7 +914,6 @@ function drawRover(ctx) {
   ctx.fillRect(-length / 2, -width / 2, length, width);
   ctx.strokeRect(-length / 2, -width / 2, length, width);
 
-  /* Front stripe. */
   ctx.fillStyle = "#075966";
   ctx.fillRect(length / 2 - 9, -width / 2 + 7, 9, width - 14);
 
@@ -841,13 +922,13 @@ function drawRover(ctx) {
   ctx.fillText("FRONT", length / 2 - 49, 4);
 
   WHEEL_POSITIONS.forEach((position, index) => {
-    drawWheel(ctx, position, rover.wheel[index].angle, index);
+    drawMapWheel(ctx, position, rover.wheel[index].angle, index);
   });
 
   ctx.restore();
 }
 
-function drawWheel(ctx, position, steeringAngle, index) {
+function drawMapWheel(ctx, position, steeringAngle, index) {
   const scale = MAP.pixelsPerMetre;
 
   const x = position.x * scale;
@@ -913,15 +994,15 @@ function renderPlot() {
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  const padding = {
+  const pad = {
     left: 46,
     right: 10,
     top: 12,
     bottom: 27,
   };
 
-  const plotWidth = canvas.width - padding.left - padding.right;
-  const plotHeight = canvas.height - padding.top - padding.bottom;
+  const plotWidth = canvas.width - pad.left - pad.right;
+  const plotHeight = canvas.height - pad.top - pad.bottom;
 
   const data = plotData();
 
@@ -945,11 +1026,11 @@ function renderPlot() {
   max += margin;
 
   const yFor = (value) => {
-    return padding.top + ((max - value) / (max - min)) * plotHeight;
+    return pad.top + ((max - value) / (max - min)) * plotHeight;
   };
 
   const xFor = (index, length) => {
-    return padding.left +
+    return pad.left +
       (length < 2 ? 0 : (index / (length - 1)) * plotWidth);
   };
 
@@ -966,8 +1047,8 @@ function renderPlot() {
     const y = yFor(value);
 
     ctx.beginPath();
-    ctx.moveTo(padding.left, y);
-    ctx.lineTo(canvas.width - padding.right, y);
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(canvas.width - pad.right, y);
     ctx.stroke();
 
     ctx.fillText(
@@ -980,13 +1061,17 @@ function renderPlot() {
   ctx.strokeStyle = "#879592";
 
   ctx.beginPath();
-  ctx.moveTo(padding.left, padding.top);
-  ctx.lineTo(padding.left, canvas.height - padding.bottom);
-  ctx.lineTo(canvas.width - padding.right, canvas.height - padding.bottom);
+  ctx.moveTo(pad.left, pad.top);
+  ctx.lineTo(pad.left, canvas.height - pad.bottom);
+  ctx.lineTo(canvas.width - pad.right, canvas.height - pad.bottom);
   ctx.stroke();
 
   ctx.fillStyle = "#5d6a6d";
-  ctx.fillText(`10 s window · ${data.unit}`, canvas.width - 114, canvas.height - 8);
+  ctx.fillText(
+    `10 s window · ${data.unit}`,
+    canvas.width - 114,
+    canvas.height - 8,
+  );
 
   drawTrace(ctx, data.reference, xFor, yFor, "#b84a37", [7, 5]);
   drawTrace(ctx, data.actual, xFor, yFor, "#075966", []);
@@ -1049,6 +1134,7 @@ function refreshTelemetry() {
       : null;
 
   UI.speed.textContent = `${rover.speed.toFixed(2)} m/s`;
+
   UI.heading.textContent =
     `${radToDeg(normalizeAngle(rover.heading)).toFixed(1)}°`;
 

@@ -8,10 +8,8 @@
   --teal: #075966;
   --teal-dark: #043f49;
   --oxide: #b84a37;
-  --wheel: #263c43;
   --reference: #b84a37;
   --actual: #075966;
-  --grid: #d9dedb;
 
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--ink);
@@ -109,10 +107,10 @@ h2 {
 
 .app-shell {
   display: grid;
-  grid-template-columns: minmax(680px, 1fr) 405px;
-  gap: 22px;
+  grid-template-columns: minmax(640px, 1fr) 455px;
+  gap: 24px;
   padding: 24px 32px 28px;
-  max-width: 1500px;
+  max-width: 1580px;
   margin: auto;
 }
 
@@ -146,17 +144,29 @@ h2 {
   line-height: 1.35;
 }
 
-.map-frame {
+.map-frame,
+.steering-frame {
   position: relative;
   border: 1px solid var(--line-dark);
-  background: #e5e9e6;
   aspect-ratio: 1050 / 660;
 }
 
-#map-canvas {
+.map-frame {
+  background: #e5e9e6;
+}
+
+.steering-frame {
+  background: #e8e6df;
+}
+
+#map-canvas,
+#steering-canvas {
   width: 100%;
   height: 100%;
   display: block;
+}
+
+#map-canvas {
   cursor: crosshair;
 }
 
@@ -202,7 +212,8 @@ h2 {
   background: var(--oxide);
 }
 
-.map-message {
+.map-message,
+.steering-message {
   position: absolute;
   top: 12px;
   left: 12px;
@@ -391,18 +402,25 @@ select {
 
 .gain-list {
   display: grid;
-  gap: 8px;
-  margin: 14px 0 10px;
+  gap: 10px;
+  margin: 16px 0 12px;
 }
 
 .gain-list label {
   display: grid;
-  grid-template-columns: 35px 1fr 44px;
+  grid-template-columns: 38px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
+  gap: 9px;
+  max-width: 330px;
   font-size: 14px;
   font-weight: 750;
 }
+
+.gain-list label > span {
+  color: var(--ink);
+  white-space: nowrap;
+}
+
 
 .gain-list output {
   text-align: right;
@@ -411,9 +429,16 @@ select {
   font-size: 13px;
 }
 
-input[type="range"] {
+input[type="number"] {
   width: 100%;
-  accent-color: var(--teal);
+  min-width: 0;
+  min-height: 38px;
+  border: 1px solid var(--line-dark);
+  background: var(--panel);
+  color: var(--ink);
+  padding: 7px 10px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
 }
 
 .controller-note {
@@ -453,6 +478,23 @@ dd {
   font-variant-numeric: tabular-nums;
   font-weight: 700;
   font-size: 13px;
+}
+
+.model-panel h2 {
+  margin: 4px 0 10px;
+}
+
+.model-panel > p:not(.eyebrow) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.55;
+  margin: 5px 0;
+}
+
+.model-panel .controller-note {
+  font-family: inherit;
+  margin-top: 10px;
 }
 
 footer {
